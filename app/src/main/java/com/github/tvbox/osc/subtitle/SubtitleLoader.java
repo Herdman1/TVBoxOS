@@ -25,6 +25,7 @@
 
 package com.github.tvbox.osc.subtitle;
 
+import android.net.Uri;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -32,6 +33,7 @@ import com.github.tvbox.osc.subtitle.exception.FatalParsingException;
 import com.github.tvbox.osc.subtitle.format.FormatASS;
 import com.github.tvbox.osc.subtitle.format.FormatSRT;
 import com.github.tvbox.osc.subtitle.format.FormatSTL;
+import com.github.tvbox.osc.subtitle.format.TimedTextFileFormat;
 import com.github.tvbox.osc.subtitle.model.TimedTextObject;
 import com.github.tvbox.osc.subtitle.runtime.AppTaskExecutor;
 import com.github.tvbox.osc.util.FileUtils;
@@ -46,6 +48,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
+import java.net.URLDecoder;
 import java.nio.charset.Charset;
 
 import okhttp3.Response;
@@ -155,10 +158,10 @@ public class SubtitleLoader {
     }
 
     private static SubtitleLoadSuccessResult loadFromRemote(final String remoteSubtitlePath)
-            throws IOException, FatalParsingException {
+            throws IOException, FatalParsingException, Exception {
         Log.d(TAG, "parseRemote: remoteSubtitlePath = " + remoteSubtitlePath);
         String referer = "";
-        if (remoteSubtitlePath.contains("alicloud")) {
+        if (remoteSubtitlePath.contains("alicloud") || remoteSubtitlePath.contains("aliyundrive")) {
             referer = "https://www.aliyundrive.com/";
         } else if (remoteSubtitlePath.contains("assrt.net")) {
             referer = "https://secure.assrt.net/";
@@ -169,37 +172,38 @@ public class SubtitleLoader {
                 .headers("User-Agent", ua)
                 .execute();
         byte[] bytes = response.body().bytes();
-        try {
-            UniversalDetector detector = new UniversalDetector(null);
-            detector.handleData(bytes, 0, bytes.length);
-            detector.dataEnd();
-            String encoding = detector.getDetectedCharset();
-            String content = new String(bytes, encoding);
-            InputStream is = new ByteArrayInputStream(content.getBytes());
-            String filename = "";
-            String contentDispostion = response.header("content-disposition", "");
-            String[] cd = contentDispostion.split(";");
-            if (cd.length > 1) {
-                String filenameInfo = cd[1];
-                filenameInfo = filenameInfo.trim();
-                if (filenameInfo.startsWith("filename=")) {
-                    filename = filenameInfo.replace("filename=", "");
-                    filename = filename.replace("\"", "");
-                } else if (filenameInfo.startsWith("filename*=")) {
-                    filename = filenameInfo.substring(filenameInfo.lastIndexOf("''")+2);
-                }
-                filename = filename.trim();
+        UniversalDetector detector = new UniversalDetector(null);
+        detector.handleData(bytes, 0, bytes.length);
+        detector.dataEnd();
+        String encoding = detector.getDetectedCharset();
+        String content = new String(bytes, encoding);
+        InputStream is = new ByteArrayInputStream(content.getBytes());
+        String filename = "";
+        String contentDispostion = response.header("content-disposition", "");
+        String[] cd = contentDispostion.split(";");
+        if (cd.length > 1) {
+            String filenameInfo = cd[1];
+            filenameInfo = filenameInfo.trim();
+            if (filenameInfo.startsWith("filename=")) {
+                filename = filenameInfo.replace("filename=", "");
+                filename = filename.replace("\"", "");
+            } else if (filenameInfo.startsWith("filename*=")) {
+                filename = filenameInfo.substring(filenameInfo.lastIndexOf("''")+2);
             }
-            SubtitleLoadSuccessResult subtitleLoadSuccessResult = new SubtitleLoadSuccessResult();
-            subtitleLoadSuccessResult.timedTextObject = loadAndParse(is, filename);
-            subtitleLoadSuccessResult.fileName = filename;
-            subtitleLoadSuccessResult.content = content;
-            subtitleLoadSuccessResult.subtitlePath = remoteSubtitlePath;
-            return subtitleLoadSuccessResult;
-        } catch (Exception e) {
-            e.printStackTrace();
+            filename = filename.trim();
+            filename = URLDecoder.decode(filename);
         }
-        return null;
+        String filePath = filename;
+        if (filename == null || filename.length() < 1) {
+            Uri uri = Uri.parse(remoteSubtitlePath);
+            filePath = uri.getPath();
+        }
+        SubtitleLoadSuccessResult subtitleLoadSuccessResult = new SubtitleLoadSuccessResult();
+        subtitleLoadSuccessResult.timedTextObject = loadAndParse(is, filePath);
+        subtitleLoadSuccessResult.fileName = filename;
+        subtitleLoadSuccessResult.content = content;
+        subtitleLoadSuccessResult.subtitlePath = remoteSubtitlePath;
+        return subtitleLoadSuccessResult;
     }
 
     private static SubtitleLoadSuccessResult loadFromLocal(final String localSubtitlePath)
@@ -207,6 +211,7 @@ public class SubtitleLoader {
         Log.d(TAG, "parseLocal: localSubtitlePath = " + localSubtitlePath);
         File file = new File(localSubtitlePath);
         if (!file.exists()) {
+            Log.d(TAG, "parseLocal: localSubtitlePath = " + localSubtitlePath + " file not exsits");
             return null;
         }
         byte[] bytes = FileUtils.readSimple(file);
@@ -228,7 +233,10 @@ public class SubtitleLoader {
     private static TimedTextObject loadAndParse(final InputStream is, final String filePath)
             throws IOException, FatalParsingException {
         String fileName = filePath.substring(filePath.lastIndexOf("/") + 1);
-        String ext = fileName.substring(fileName.lastIndexOf("."));
+        String ext = "";
+        if (fileName.lastIndexOf(".") > 0) {
+            ext = fileName.substring(fileName.lastIndexOf("."));
+        }
         Log.d(TAG, "parse: name = " + fileName + ", ext = " + ext);
         Reader reader = new UnicodeReader(is); //处理有BOM头的utf8
         InputStream newInputStream = new ReaderInputStream(reader, Charset.defaultCharset());
@@ -241,7 +249,16 @@ public class SubtitleLoader {
         } else if (".ttml".equalsIgnoreCase(ext)) {
             return new FormatSTL().parseFile(fileName, newInputStream);
         }
-        return new FormatSRT().parseFile(fileName, newInputStream);
+        TimedTextFileFormat[] arr = {new FormatSRT(), new FormatASS(), new FormatSTL(), new FormatSTL()};
+        for(TimedTextFileFormat oneFormat : arr) {
+            try {
+                TimedTextObject obj = oneFormat.parseFile(fileName, newInputStream);
+                return obj;
+            } catch (Exception e) {
+                continue;
+            }
+        }
+        return null;
     }
 
     public interface Callback {
