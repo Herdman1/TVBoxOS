@@ -162,9 +162,9 @@ public class ApiConfig {
         return configUrl;
     }
     public void loadConfig(boolean useCache, LoadConfigCallback callback, Activity activity) {
-        String apiUrl = Hawk.get(HawkConfig.API_URL, "");
+        String apiUrl = Hawk.get(HawkConfig.API_URL, "http://www.饭太硬.com/tv");
         //独立加载直播配置
-        String liveApiUrl = Hawk.get(HawkConfig.LIVE_API_URL, "");
+        String liveApiUrl = Hawk.get(HawkConfig.LIVE_API_URL, "http://www.饭太硬.com/tv");
         String liveApiConfigUrl=configUrl(liveApiUrl);
         if(!liveApiUrl.isEmpty() && !liveApiUrl.equals(apiUrl)){
             if(liveApiUrl.contains(".txt") || liveApiUrl.contains(".m3u") || liveApiUrl.contains("=txt") || liveApiUrl.contains("=m3u")){
